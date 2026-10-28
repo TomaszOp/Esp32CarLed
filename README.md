@@ -70,6 +70,15 @@ Ikona WiFi w prawym górnym rogu panelu otwiera stronę `/wifi`. Wybrany tryb za
 | Tylko hotspot CarLed | od razu otwarty hotspot CarLed |
 | Domyślne z config.h (brak zapisu) | łączy się z siecią z `config.h`, a gdy się nie uda, uruchamia hotspot CarLed |
 
+### Aktualizacja firmware przez WiFi (OTA)
+
+Pierwszy raz program trzeba wgrać przez USB. Potem nowe wersje można wgrywać bez kabla, na dwa sposoby. Oba chroni hasło `OTA_PASSWORD` z `config.h` (domyślnie `carled`, login na stronie: `admin`). Zmieniając hasło, zmień też `--auth=` w `platformio.ini`.
+
+- **Z PlatformIO:** `pio run -e esp32c3_ota -t upload`. Komputer musi być w tej samej sieci co ESP32. Domyślnie wysyła na `carled.local`; jeśli nazwa nie działa, wpisz w `upload_port` adres IP z monitora (w hotspocie CarLed: `192.168.4.1`).
+- **Z panelu WWW:** ikona strzałki w górę obok ikony WiFi otwiera stronę `/update`. Wybierz plik `.pio/build/esp32c3/firmware.bin` (powstaje po `pio run`) i kliknij **Wgraj**. Po wgraniu ESP32 sam się restartuje.
+
+Ustawienia WiFi w NVS zostają po aktualizacji. Nieudane lub przerwane wgrywanie nie psuje działającego programu, bo nowy trafia do drugiej partycji.
+
 ## Obsługa panelu
 
 | Kliknięcie na schemacie | Działanie |

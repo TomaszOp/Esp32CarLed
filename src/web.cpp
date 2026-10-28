@@ -1,9 +1,11 @@
 #include "web.h"
 
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
+#include <Update.h>
 #include <WiFi.h>
 
 #include "NvsSettings.h"
@@ -33,6 +35,8 @@ void pushCmd(CmdType type, uint8_t arg = 0) {
   Cmd c{type, arg};
   xQueueSend(cmdQueue, &c, 0);
 }
+
+constexpr bool OTA_HAS_PASSWORD = sizeof(OTA_PASSWORD) > 1;  // "" = bez hasla
 
 // ---------------- WiFi ----------------
 NvsSettings::WifiSettings savedWifi;  // ustawienia z NVS odczytane przy starcie
@@ -94,7 +98,90 @@ void startWifi() {
   }
   if (!connected) startAp();
 
-  if (MDNS.begin(MDNS_NAME)) MDNS.addService("http", "tcp", 80);
+  if (MDNS.begin(MDNS_NAME)) {
+    MDNS.addService("http", "tcp", 80);
+    MDNS.enableArduino(OTA_PORT, OTA_HAS_PASSWORD);  // ESP widoczny w Arduino IDE
+  }
+}
+
+// ---------------- OTA ----------------
+// Wgrywanie z PlatformIO / Arduino IDE (espota). handle() blokuje loop() na czas wgrywania.
+void startArduinoOta() {
+  ArduinoOTA.setHostname(MDNS_NAME);
+  ArduinoOTA.setPort(OTA_PORT);
+  if (OTA_HAS_PASSWORD) ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setMdnsEnabled(false);  // mDNS uruchamia startWifi()
+  ArduinoOTA
+      .onStart([]() { Serial.println("OTA: start"); })
+      .onEnd([]() { Serial.println("OTA: koniec, restart"); })
+      .onProgress([](unsigned int done, unsigned int total) {
+        static uint8_t lastPct = 255;
+        uint8_t pct = done * 100 / total;
+        if (pct / 10 != lastPct / 10) Serial.printf("OTA: %u%%\n", pct);
+        lastPct = pct;
+      })
+      .onError([](ota_error_t e) { Serial.printf("OTA: blad %u\n", e); });
+  ArduinoOTA.begin();
+}
+
+bool otaAuthorized(AsyncWebServerRequest* req) {
+  return !OTA_HAS_PASSWORD || req->authenticate(OTA_USER, OTA_PASSWORD);
+}
+
+// Wgrywanie pliku .bin ze strony /update. Jednoczesnie tylko jedno wgrywanie.
+String updateErr;
+
+void handleUpdateUpload(AsyncWebServerRequest* req, const String& filename, size_t index,
+                        uint8_t* data, size_t len, bool final) {
+  if (index == 0) {
+    updateErr = "";
+    if (!otaAuthorized(req)) {
+      updateErr = "Brak autoryzacji";
+      return;
+    }
+    if (Update.isRunning()) Update.abort();  // przerwane wczesniejsze wgrywanie
+    Serial.printf("Aktualizacja: %s\n", filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      updateErr = Update.errorString();
+      return;
+    }
+  }
+  if (!updateErr.isEmpty() || !Update.isRunning()) return;
+
+  if (Update.write(data, len) != len) {
+    updateErr = Update.errorString();
+    Update.abort();
+    return;
+  }
+  if (final && !Update.end(true)) updateErr = Update.errorString();
+}
+
+void handleUpdateDone(AsyncWebServerRequest* req) {
+  if (!otaAuthorized(req)) return req->requestAuthentication();
+  if (updateErr.isEmpty() && !Update.isFinished()) updateErr = "Niepelny plik";
+  if (!updateErr.isEmpty()) {
+    Serial.printf("Aktualizacja nieudana: %s\n", updateErr.c_str());
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["err"] = updateErr;
+    String s;
+    serializeJson(doc, s);
+    return req->send(400, "application/json", s);
+  }
+  Serial.println("Aktualizacja zakonczona, restart.");
+  req->send(200, "application/json", "{\"ok\":true}");
+  pushCmd(CmdType::Restart);
+}
+
+// Informacje o firmware dla strony /update.
+String buildUpdateJson() {
+  JsonDocument doc;
+  doc["build"] = __DATE__ " " __TIME__;
+  doc["size"] = ESP.getSketchSize();
+  doc["free"] = ESP.getFreeSketchSpace();
+  String s;
+  serializeJson(doc, s);
+  return s;
 }
 
 // ---------------- JSON ----------------
@@ -230,6 +317,7 @@ namespace Web {
 void begin() {
   cmdQueue = xQueueCreate(16, sizeof(Cmd));
   startWifi();
+  startArduinoOta();
 
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
@@ -245,11 +333,22 @@ void begin() {
     req->send(200, "application/json", buildWifiJson());
   });
   server.on("/wifi", HTTP_POST, handleWifiSave);
+  server.on("/update", HTTP_GET, [](AsyncWebServerRequest* req) {
+    if (!otaAuthorized(req)) return req->requestAuthentication();
+    req->send(200, "text/html", reinterpret_cast<const uint8_t*>(UPDATE_HTML),
+              strlen_P(UPDATE_HTML));
+  });
+  server.on("/update.json", HTTP_GET, [](AsyncWebServerRequest* req) {
+    req->send(200, "application/json", buildUpdateJson());
+  });
+  server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   server.onNotFound([](AsyncWebServerRequest* req) { req->redirect("/"); });
   server.begin();
 }
 
 void handleCommands() {
+  ArduinoOTA.handle();
+
   Cmd c;
   while (xQueueReceive(cmdQueue, &c, 0) == pdTRUE) {
     switch (c.type) {

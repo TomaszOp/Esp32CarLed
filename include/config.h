@@ -20,6 +20,16 @@
 // #define WIFI_LOW_TX_POWER
 
 // ============================================================
+//  Aktualizacja firmware przez WiFi (OTA)
+// ============================================================
+// Haslo do wgrywania z PlatformIO (env esp32c3_ota) i do strony /update
+// (login: OTA_USER). Zmieniajac je, zmien tez --auth w platformio.ini.
+// Puste "" = bez hasla (kazdy w sieci/hotspocie moze wgrac firmware).
+#define OTA_USER     "admin"
+#define OTA_PASSWORD "carled"
+#define OTA_PORT     3232
+
+// ============================================================
 //  Tasma LED
 // ============================================================
 #define LED_PIN        4

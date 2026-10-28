@@ -2,10 +2,10 @@
 
 namespace Web {
 
-// WiFi (z przejsciem na Access Point), serwer HTTP i WebSocket.
+// WiFi (z przejsciem na Access Point), serwer HTTP, WebSocket i OTA.
 void begin();
 
-// Wykonuje komendy odebrane ze strony. Wywolywac w loop() przed Lights::update().
+// Obsluguje OTA i wykonuje komendy odebrane ze strony. Wywolywac w loop() przed Lights::update().
 void handleCommands();
 
 // Wysyla stan i podglad diod do otwartych stron. Wywolywac po Lights::update().

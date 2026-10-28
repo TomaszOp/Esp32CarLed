@@ -22,9 +22,9 @@ h1 span{color:var(--mut);font-weight:400}
 #conn i{width:9px;height:9px;border-radius:50%;background:var(--red);display:inline-block}
 #conn.on i{background:#2ee66b}
 .hr{display:flex;align-items:center;gap:12px}
-#wifiCfg{display:flex;color:var(--mut);padding:4px}
-#wifiCfg:hover{color:var(--acc)}
-#wifiCfg svg{width:22px;height:22px}
+.ico{display:flex;color:var(--mut);padding:4px}
+.ico:hover{color:var(--acc)}
+.ico svg{width:22px;height:22px}
 .car{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:8px}
 svg{width:100%;height:auto;max-height:62vh;display:block;margin:0 auto;user-select:none}
 .body{fill:#1f2430;stroke:#3a4152;stroke-width:2}
@@ -67,7 +67,8 @@ dialog h2{margin:0 0 12px;font-size:17px}
   <h1>Peugeot 9X8 <span>LED</span></h1>
   <div class="hr">
     <div id="conn"><i></i><span>rozłączono</span></div>
-    <a id="wifiCfg" href="/wifi" title="Ustawienia WiFi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5 12a10 10 0 0 1 14 0"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg></a>
+    <a class="ico" href="/update" title="Aktualizacja firmware"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></a>
+    <a class="ico" href="/wifi" title="Ustawienia WiFi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5 12a10 10 0 0 1 14 0"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg></a>
   </div>
 </header>
 
@@ -289,6 +290,74 @@ $("f").onsubmit = e => {
     if (d.ok) $("msg").textContent = "Zapisano. ESP32 uruchamia się ponownie z nowymi ustawieniami…";
     else { $("msg").textContent = "Błąd: " + d.err; $("save").disabled = false; }
   }).catch(() => { $("msg").textContent = "Brak odpowiedzi od ESP32."; $("save").disabled = false; });
+};
+</script>
+</body>
+</html>
+)rawliteral";
+
+// Strona aktualizacji firmware (/update). Plik .bin wysyla POST /update.
+const char UPDATE_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d0f14">
+<title>Aktualizacja - Peugeot 9X8 LED</title>
+<style>
+:root{--bg:#0d0f14;--card:#171a22;--line:#2a2f3b;--txt:#e8eaf0;--mut:#8a90a0;--acc:#4fd1ff;--red:#ff3b47}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center}
+main{width:100%;max-width:440px;padding:16px}
+header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+header a{color:var(--mut);text-decoration:none;font-size:22px}
+h1{font-size:18px;margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:12px}
+input[type=file]{font:inherit;color:var(--mut);padding:12px;border-radius:12px;border:1px dashed var(--line);background:var(--bg);width:100%}
+button{font:inherit;font-weight:600;border:0;border-radius:14px;padding:14px;cursor:pointer;background:var(--acc);color:#000;font-size:17px}
+button:disabled{opacity:.5}
+progress{width:100%;height:10px;accent-color:var(--acc)}
+#info,#msg,.hint{color:var(--mut);font-size:13px;margin:0}
+#msg{min-height:18px;text-align:center}
+</style>
+</head>
+<body>
+<main>
+<header><a href="/" title="Powrót">&#8592;</a><h1>Aktualizacja firmware</h1></header>
+<form class="card" id="f">
+  <p id="info">Wczytuję…</p>
+  <input type="file" id="file" accept=".bin">
+  <p class="hint">Plik: .pio/build/esp32c3/firmware.bin. Nie wyłączaj zasilania w trakcie wgrywania.</p>
+  <progress id="prog" max="100" value="0" hidden></progress>
+  <button type="submit" id="send">Wgraj</button>
+  <p id="msg"></p>
+</form>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const kb = b => Math.round(b / 1024) + " KB";
+
+fetch("/update.json").then(r => r.json()).then(i => {
+  $("info").textContent = "Obecny firmware: " + i.build + ", " + kb(i.size) + " (miejsce na nowy: " + kb(i.free) + ").";
+}).catch(() => { $("info").textContent = "Nie udało się odczytać informacji o firmware."; });
+
+$("f").onsubmit = e => {
+  e.preventDefault();
+  const file = $("file").files[0];
+  if (!file) { $("msg").textContent = "Wybierz plik .bin."; return; }
+  const fd = new FormData(); fd.append("firmware", file, file.name);
+  const x = new XMLHttpRequest();
+  const done = (text, again) => { $("msg").textContent = text; $("send").disabled = !again; };
+  x.open("POST", "/update");
+  x.upload.onprogress = p => { if (p.lengthComputable) { $("prog").value = p.loaded * 100 / p.total; $("msg").textContent = "Wgrywam… " + Math.round(p.loaded * 100 / p.total) + "%"; } };
+  x.onload = () => {
+    let d = {}; try { d = JSON.parse(x.responseText); } catch (_) {}
+    if (d.ok) { done("Gotowe. ESP32 uruchamia się ponownie…"); setTimeout(() => location.href = "/", 8000); }
+    else done("Błąd: " + (d.err || ("HTTP " + x.status)), true);
+  };
+  x.onerror = () => done("Brak odpowiedzi od ESP32.", true);
+  $("prog").hidden = false; $("prog").value = 0; done("Wgrywam…");
+  x.send(fd);
 };
 </script>
 </body>
