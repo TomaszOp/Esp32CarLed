@@ -85,7 +85,8 @@ Pod schematem: przycisk **OFF** i **Efekty specjalne** (okno z listą efektów; 
 
 ```
 Esp32CarLed/
-├── platformio.ini        płytka, biblioteki
+├── platformio.ini        płytka, ustawienia kompilacji
+├── lib/                  biblioteki (kopie lokalne, bez pobierania z sieci)
 ├── include/
 │   ├── config.h          WiFi, pin, mapowanie diod, kolory, czasy
 │   ├── lights.h          interfejs logiki świateł
@@ -98,7 +99,7 @@ Esp32CarLed/
     └── web.cpp           WiFi/AP, serwer HTTP, WebSocket, strona /wifi
 ```
 
-Biblioteki (pobierane automatycznie): FastLED, ESPAsyncWebServer i AsyncTCP (ESP32Async), ArduinoJson.
+Biblioteki są w katalogu `lib/`: FastLED 3.9.20, ESPAsyncWebServer 3.12.1 i AsyncTCP 3.5.0 (ESP32Async), ArduinoJson 7.4.3. Z `lib/ESPAsyncWebServer/library.json` usunięto sekcję `dependencies`, bo PlatformIO pobierał z niej biblioteki dla ESP8266 i Raspberry Pi.
 
 ## Problemy
 
