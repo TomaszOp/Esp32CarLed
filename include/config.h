@@ -36,14 +36,14 @@
 //  Tasma LED
 // ============================================================
 #define LED_PIN        4
-#define NUM_LEDS       22
+#define NUM_LEDS       25
 #define LED_BRIGHTNESS 100     // 0-255, bezpieczny limit dla ladowarki 5 V
 #define MAX_MILLIAMPS  1000    // FastLED przyciemni tasme ponad ten pobor
 
 #define FRAME_MS       20      // odswiezanie animacji (50 klatek/s)
 
 // ============================================================
-//  Mapowanie diod (indeksy 0-21)
+//  Mapowanie diod (indeksy 0-24)
 // ============================================================
 // Strefy przod/tyl: kolejnosc  { zewnetrzna, srodkowa, wewnetrzna }.
 // Zewnetrzna = przy rogu auta, wewnetrzna = blizej srodka.
@@ -58,12 +58,25 @@ constexpr int8_t RIGHT_REAR[3]  = { 6,  7, -1};
 constexpr int8_t RIGHT_SIDE[6]  = { 0,  1,  2,  3,  4,  5};
 constexpr int8_t LEFT_SIDE[6]   = {15, 14, 13, 12, 11, 10};
 
+// Kabina: 3 diody na koncu tasmy, kolejnosc od lewej do prawej.
+constexpr int8_t CABIN[3]       = {22, 23, 24};
+
 // ============================================================
 //  Kolory
 // ============================================================
 #define COLOR_HEAD_FRONT CRGB(255, 255, 255)  // swiatla glowne, przod
 #define COLOR_HEAD_REAR  CRGB(255,   0,   0)  // swiatla glowne, tyl
 #define COLOR_TURN       CRGB(255, 30,   0)  // kierunkowskaz (bursztyn)
+
+// ============================================================
+//  Animacja wlaczania swiatel glownych
+//  diody zapalaja sie po kolei (zewnetrzna -> wewnetrzna) i zostaja,
+//  potem HEAD_FLASH_COUNT blyskow jasniej i powrot do HEAD_LEVEL
+// ============================================================
+#define HEAD_LEVEL       170   // normalna jasnosc swiatel (0-255), blysk = 255
+#define HEAD_ON_STEP_MS  150   // co tyle zapala sie kolejna dioda
+#define HEAD_FLASH_MS    120   // dlugosc blysku i przerwy miedzy blyskami
+#define HEAD_FLASH_COUNT 2
 
 // ============================================================
 //  Kierunkowskazy: biegnaca pojedyncza dioda
@@ -82,6 +95,27 @@ constexpr int8_t LEFT_SIDE[6]   = {15, 14, 13, 12, 11, 10};
 #define BREATHE_BPM      12
 #define BREATHE_COLOR    CRGB(0, 160, 255)
 #define POLICE_STEP_MS   70
+
+// Jasnosc (0-255, na wierzch LED_BRIGHTNESS) i predkosc (% predkosci
+// bazowej) efektow, zmieniane suwakami w panelu. Wartosci startowe:
+#define FX_BRIGHT_DEFAULT 255
+#define FX_SPEED_DEFAULT  100
+#define FX_BRIGHT_MIN     10
+#define FX_SPEED_MIN      25
+#define FX_SPEED_MAX      300
+
+// ============================================================
+//  Kabina (3 diody, niezalezne od reszty auta)
+// ============================================================
+#define CABIN_WARM_COLOR    CRGB(255, 120,  30)  // "Cieple swiatlo"
+#define CABIN_AMBIENT_COLOR CRGB(  0,  40, 160)  // "Ambient", przygaszony niebieski
+#define CABIN_BREATHE_COLOR CRGB(150,   0, 255)
+#define CABIN_BREATHE_BPM   15
+#define CABIN_RAINBOW_SPEED 2
+#define CABIN_RACE_STEP_MS  600   // "Start wyscigu": co tyle zapala sie kolejna dioda
+#define CABIN_RACE_HOLD_MS  900   // wszystkie swieca, potem gasna ("lights out")
+#define CABIN_RACE_PAUSE_MS 1200  // przerwa przed kolejnym startem
+#define CABIN_RACE_COLOR    CRGB(255, 0, 0)
 
 // ============================================================
 //  Efekty na calym aucie (wszystkie 22 diody)

@@ -1,14 +1,14 @@
 # Esp32CarLed
 
-Sterowanie światłami modelu **Peugeot 9X8** z telefonu. ESP32-C3 steruje taśmą WS2812B (22 diody) i wystawia panel WWW ze schematem auta, który na żywo pokazuje, co świeci na modelu.
+Sterowanie światłami modelu **Peugeot 9X8** z telefonu. ESP32-C3 steruje taśmą WS2812B (25 diod: 22 na nadwoziu i 3 w kabinie) i wystawia panel WWW ze schematem auta, który na żywo pokazuje, co świeci na modelu.
 
 ## Funkcje
 
-- **Światła główne:** przód biały, tył czerwony.
+- **Światła główne:** przód biały, tył czerwony. Przy włączaniu diody zapalają się po kolei jak kierunkowskaz (zewnętrzna → wewnętrzna) i zostają, potem dwa razy błyskają jaśniej i wracają do normalnej jasności (`HEAD_LEVEL` i `HEAD_*` w `config.h`).
 - **Kierunkowskazy:** biegnąca pojedyncza dioda (zewnętrzna → środkowa → wewnętrzna), z przodu i z tyłu danej strony.
 - **Światła awaryjne:** oba kierunkowskazy jednocześnie. Włączony wcześniej kierunkowskaz wraca po ich wyłączeniu.
 - **Efekty specjalne na bokach:** tęcza, skaner, oddychanie, policja. Reszta auta działa w tym czasie niezależnie.
-- **Efekty na całym aucie** (wszystkie 22 diody):
+- **Efekty na całym aucie** (wszystkie 22 diody nadwozia, kabina działa osobno):
   - *Kometa* – biało-niebieska głowa z ogonem biegnie od przodu do tyłu po obu stronach, potem krótka przerwa.
   - *Ogień* – płomienie (Fire2012) od tyłu do przodu, liczone osobno dla lewej i prawej strony.
   - *Iskry* – losowe kolorowe iskry, które powoli gasną.
@@ -20,6 +20,9 @@ Sterowanie światłami modelu **Peugeot 9X8** z telefonu. ESP32-C3 steruje taśm
   - *Neon* – stały kolor na wszystkich diodach; kolor wybierasz w panelu obok przycisku (domyślnie fioletowy, nie jest zapisywany w NVS).
 
   Światła główne, kierunkowskaz i awaryjne zachowują stan w trakcie efektu (można je też przełączać). Kierunkowskazy i awaryjne świecą na wierzchu efektu, a po wyłączeniu efektu wracają światła takie, jak są ustawione. Czasy i kolory efektów są w `config.h`.
+
+  Jasność i prędkość wszystkich efektów zmieniasz suwakami w oknie **Efekty specjalne**.
+- **Kabina:** 3 diody w kokpicie, włączane z panelu niezależnie od reszty auta. Tryby: ciepłe światło, ambient (niebieski), pulsowanie, tęcza, światła startowe (diody zapalają się po kolei na czerwono i gasną razem). Ma własne suwaki jasności i prędkości.
 - **OFF:** gasi wszystkie diody.
 - **Test diod:** osobna strona do sprawdzania pojedynczych diod, stref i kolorów.
 - Po wyłączeniu kierunkowskazu lub efektu diody wracają do poprzedniego stanu.
@@ -29,7 +32,7 @@ Sterowanie światłami modelu **Peugeot 9X8** z telefonu. ESP32-C3 steruje taśm
 | Element | Opis |
 | --- | --- |
 | Mikrokontroler | ESP32-C3 (np. DevKitM-1 lub SuperMini) |
-| Taśma LED | WS2812B, 22 diody, kolejność kolorów GRB |
+| Taśma LED | WS2812B, 25 diod, kolejność kolorów GRB |
 | Zasilanie | ładowarka USB 5 V |
 | Pin danych | GPIO 4 (zmiana w `config.h`) |
 
@@ -47,6 +50,9 @@ Jasność jest ograniczona do 100/255, a pobór prądu do 1 A (`LED_BRIGHTNESS`,
 | Lewy bok | 10–15 |
 | Lewy przód | 16, 17, 18 |
 | Prawy przód | 19, 20, 21 |
+| Kabina (od lewej do prawej) | 22, 23, 24 |
+
+Diody kabiny to dalszy ciąg taśmy: DIN pierwszej diody kabiny podłącz do DOUT diody 21.
 
 Kolejność diod kierunkowskazu ustawiasz w `include/config.h` jako `{ zewnętrzna, środkowa, wewnętrzna }`, np.:
 
@@ -114,6 +120,10 @@ Pod schematem: przycisk **OFF** i **Efekty specjalne** (okno z listą efektów w
 | `{"cmd":"hazard"}` | awaryjne wł./wył. |
 | `{"cmd":"effect","name":"comet"}` | efekt: `rainbow`, `scanner`, `breathe`, `police`, `comet`, `fire`, `sparkle`, `revs`, `tricolor`, `start`, `beacon`, `strobe`, `neon` albo `none` |
 | `{"cmd":"neon","color":"#8000FF"}` | kolor efektu Neon (tylko RAM, nie zmienia aktywnego efektu) |
+| `{"cmd":"cabin"}` | kabina wł./wył. |
+| `{"cmd":"cabinMode","name":"warm"}` | włącza kabinę w trybie `warm`, `ambient`, `breathe`, `rainbow` albo `race` |
+| `{"cmd":"fxBright","v":200}` / `{"cmd":"cabinBright","v":200}` | jasność efektów / kabiny, 10–255 |
+| `{"cmd":"fxSpeed","v":150}` / `{"cmd":"cabinSpeed","v":150}` | prędkość efektów / kabiny w %, 25–300 |
 | `{"cmd":"off"}` | wszystko wyłączone |
 
 Stan rozsyłany do stron zawiera m.in. pole `"neon":"#rrggbb"`.
@@ -127,6 +137,8 @@ Ikona żarówki w prawym górnym rogu panelu otwiera stronę `/test`. Strona jes
 - **Zakończ test** (albo strzałka powrotu) przywraca światła. Zamknięcie karty lub utrata połączenia też kończy test, więc auto nie zostanie w trybie testu.
 
 W trakcie testu panel główny pokazuje „Trwa test diod”, a jego przyciski nie zmieniają świateł, żeby po teście wrócił dokładnie zapamiętany stan.
+
+Niżej sekcja **Kabina**: przycisk **Wł./Wył.** i lista trybów. Wybranie trybu włącza kabinę w tym trybie, ponowne kliknięcie aktywnego trybu ją wyłącza. Kabina pamięta ostatni tryb, także po **OFF**. Pod trybami są suwaki **Jasność** (5–100%) i **Prędkość** (25–300%) kabiny; takie same są w oknie **Efekty specjalne** dla efektów bocznych. OFF ich nie zmienia, ale po restarcie ESP32 wracają do wartości startowych (`FX_BRIGHT_DEFAULT`, `FX_SPEED_DEFAULT`).
 
 ## Struktura projektu
 
@@ -142,7 +154,7 @@ Esp32CarLed/
 │   └── web_page.h        panel, strony WiFi, aktualizacji i testu diod (HTML/CSS/JS w PROGMEM)
 └── src/
     ├── main.cpp          setup() i loop()
-    ├── lights.cpp        warstwy świateł, kierunkowskazy, efekty, tryb testu
+    ├── lights.cpp        warstwy świateł, kierunkowskazy, efekty, kabina, tryb testu
     └── web.cpp           WiFi/AP, serwer HTTP, WebSocket, strony /wifi, /update, /test
 ```
 

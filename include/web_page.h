@@ -65,6 +65,19 @@ dialog h2{margin:0 0 12px;font-size:17px}
 .fx button.on{border-color:var(--acc);background:#13303b}
 .fx button.on::after{content:"aktywny";font-size:11px;color:var(--acc);font-weight:600}
 .dlgBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;flex:none}
+.cab{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px;margin-top:10px}
+.cabHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.cabHead h2{font-size:15px;margin:0}
+#cabBtn{padding:8px 16px;min-width:84px}
+#cabBtn.on{background:var(--acc);border-color:var(--acc);color:#000}
+.cabModes{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.cabModes button{text-align:left;display:flex;flex-direction:column;gap:2px;padding:10px 12px;font-size:14px}
+.cabModes button small{font-weight:400;font-size:11px;color:var(--mut)}
+.cabModes button.sel{border-color:var(--line);background:#1d2230}
+.cabModes button.on{border-color:var(--acc);background:#13303b}
+.sl{flex:none;display:grid;grid-template-columns:76px 1fr 44px;align-items:center;gap:8px;font-size:13px;color:var(--mut);margin-top:10px}
+.sl output{text-align:right;color:var(--txt);font-variant-numeric:tabular-nums}
+.sl input{width:100%;accent-color:var(--acc)}
 </style>
 </head>
 <body>
@@ -112,18 +125,31 @@ dialog h2{margin:0 0 12px;font-size:17px}
   <span class="chip amb" id="cHaz">Awaryjne</span>
   <span class="chip" id="cFx">Efekt: brak</span>
   <span class="chip amb on" id="cTest" hidden>Trwa test diod</span>
+  <span class="chip" id="cCab">Kabina</span>
 </div>
 
 <div class="btns">
   <button id="off">OFF</button>
   <button id="fxBtn">Efekty specjalne</button>
 </div>
+
+<section class="cab">
+  <div class="cabHead">
+    <h2>Kabina</h2>
+    <button id="cabBtn">Wył.</button>
+  </div>
+  <div class="cabModes" id="cabList"></div>
+  <label class="sl">Jasność<input type="range" id="cabinBright" min="10" max="255" data-cmd="cabinBright"><output></output></label>
+  <label class="sl">Prędkość<input type="range" id="cabinSpeed" min="25" max="300" step="5" data-cmd="cabinSpeed"><output></output></label>
+</section>
 <p class="hint" id="hint">Dotknij przodu, rogów lub środka auta.</p>
 </main>
 
 <dialog id="dlg">
   <h2>Efekty specjalne</h2>
   <div class="fx" id="fxList"></div>
+  <label class="sl">Jasność<input type="range" id="fxBright" min="10" max="255" data-cmd="fxBright"><output></output></label>
+  <label class="sl">Prędkość<input type="range" id="fxSpeed" min="25" max="300" step="5" data-cmd="fxSpeed"><output></output></label>
   <div class="dlgBtns">
     <button id="fxNone">Wyłącz efekt</button>
     <button id="fxClose">Zamknij</button>
@@ -148,6 +174,13 @@ const FX = [
   ["neon","Neon","Stały kolor na wszystkich diodach, kolor wybierz obok",1]
 ];
 const FX_GROUPS = ["Na bokach", "Na całym aucie"];
+const CAB = [
+  ["warm","Ciepłe światło","Stała ciepła biel"],
+  ["ambient","Ambient","Przygaszony niebieski"],
+  ["breathe","Pulsowanie","Fioletowe, płynne"],
+  ["rainbow","Tęcza","Kolory płyną po kabinie"],
+  ["race","Światła startowe","Czerwone po kolei, potem gasną"]
+];
 const NS = "http://www.w3.org/2000/svg";
 const $ = id => document.getElementById(id);
 let ws, st = {}, ledEls = [];
@@ -170,6 +203,8 @@ function buildLeds(m){
   // boki: od przodu do tylu
   m.ls.forEach((i, s) => put(i, 33, 120 + s * 38));
   m.rs.forEach((i, s) => put(i, 187, 120 + s * 38));
+  // kabina: od lewej do prawej, w szybie kokpitu
+  (m.cb || []).forEach((i, s) => put(i, 92 + s * 18, 158));
 }
 
 function paintLeds(hex){
@@ -199,6 +234,20 @@ function render(){
   if (st.neon && document.activeElement !== $("neonColor")) $("neonColor").value = st.neon;
   $("cTest").hidden = !st.test;
   $("hint").textContent = st.test ? "Trwa test diod na innej stronie, sterowanie jest wstrzymane." : "Dotknij przodu, rogów lub środka auta.";
+  document.querySelectorAll(".sl input").forEach(r => {
+    const v = st[r.id];
+    if (v === undefined || r === dragging) return;  // nie przeskakuj pod palcem
+    r.value = v; showSlider(r);
+  });
+  const cab = CAB.find(c => c[0] === st.cabinMode);
+  $("cabBtn").classList.toggle("on", !!st.cabin);
+  $("cabBtn").textContent = st.cabin ? "Wł." : "Wył.";
+  $("cCab").textContent = "Kabina" + (st.cabin && cab ? ": " + cab[1] : "");
+  $("cCab").classList.toggle("on", !!st.cabin);
+  document.querySelectorAll(".cabModes button").forEach(b => {
+    b.classList.toggle("on", !!st.cabin && b.dataset.mode === st.cabinMode);
+    b.classList.toggle("sel", !st.cabin && b.dataset.mode === st.cabinMode);
+  });
 }
 
 function connect(){
@@ -243,6 +292,30 @@ FX.forEach(([id, name, desc, grp], n) => {
   } else $("fxList").appendChild(b);
 });
 
+// klikniecie aktywnego trybu wylacza kabine, innego trybu przelacza i wlacza
+CAB.forEach(([id, name, desc]) => {
+  const b = document.createElement("button");
+  b.dataset.mode = id;
+  b.innerHTML = name + "<small>" + desc + "</small>";
+  b.onclick = () => send(st.cabin && st.cabinMode === id ? {cmd: "cabin"} : {cmd: "cabinMode", name: id});
+  $("cabList").appendChild(b);
+});
+
+// Suwaki: jasnosc (10-255, pokazywana w %) i predkosc (25-300 %).
+// Podczas przesuwania wysylaja najwyzej co 80 ms, na koniec zawsze ostatnia wartosc.
+let dragging = null;
+function showSlider(r){
+  const v = +r.value;
+  r.nextElementSibling.textContent = (r.id.endsWith("Bright") ? Math.round(v / 2.55) : v) + "%";
+}
+document.querySelectorAll(".sl input").forEach(r => {
+  let last = 0;
+  const push = () => { last = Date.now(); send({cmd: r.dataset.cmd, v: +r.value}); };
+  r.addEventListener("input", () => { dragging = r; showSlider(r); if (Date.now() - last > 80) push(); });
+  r.addEventListener("change", () => { push(); dragging = null; });
+});
+
+$("cabBtn").onclick = () => send({cmd: "cabin"});
 $("off").onclick = () => send({cmd: "off"});
 $("fxBtn").onclick = () => $("dlg").showModal();
 $("fxClose").onclick = () => $("dlg").close();
@@ -500,6 +573,7 @@ input[type=color]::-webkit-color-swatch{border:0;border-radius:10px}
     <option value="ls">Bok lewy</option>
     <option value="rs">Bok prawy</option>
     <option value="sides">Oba boki</option>
+    <option value="cb">Kabina</option>
   </select>
   <label for="nums">Numery diod</label>
   <input type="text" id="nums" inputmode="decimal" autocomplete="off" placeholder="np. 3, 5, 10-12">
@@ -604,6 +678,8 @@ function buildLeds(m){
   map.rr.forEach((i, s) => put(i, 170 - s * 21, 400, "tył prawy", tri[s], 170 - s * 21, 380));
   map.ls.forEach((i, s) => put(i, 33, 120 + s * 38, "bok lewy", (s + 1) + ". od przodu", 60, 125 + s * 38));
   map.rs.forEach((i, s) => put(i, 187, 120 + s * 38, "bok prawy", (s + 1) + ". od przodu", 160, 125 + s * 38));
+  const cab = ["lewa", "środkowa", "prawa"];
+  (map.cb || []).forEach((i, s) => put(i, 88 + s * 22, 165, "kabina", cab[s], 88 + s * 22, 192));
 }
 
 function paintLeds(hex){

@@ -1,5 +1,5 @@
 // Esp32CarLed - sterowanie swiatlami modelu Peugeot 9X8
-// ESP32-C3 + WS2812B (22 diody), panel WWW z podgladem na zywo.
+// ESP32-C3 + WS2812B (25 diod, w tym 3 w kabinie), panel WWW z podgladem na zywo.
 // Ustawienia (WiFi, pin, mapowanie diod, kolory, czasy): include/config.h
 
 #include <Arduino.h>

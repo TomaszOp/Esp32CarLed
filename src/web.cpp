@@ -21,11 +21,12 @@ AsyncWebSocket ws("/ws");
 // Komendy z WebSocketu przychodza w zadaniu AsyncTCP, a diody renderuje loop().
 // Kolejka przenosi je bezpiecznie do loop().
 enum class CmdType : uint8_t {
-  Head, TurnLeft, TurnRight, Hazard, SetEffect, Neon, Off, Restart, TestSet, TestEnd
+  Head, TurnLeft, TurnRight, Hazard, SetEffect, Neon, Cabin, SetCabinMode,
+  FxBright, FxSpeed, CabinBright, CabinSpeed, Off, Restart, TestSet, TestEnd
 };
 struct Cmd {
   CmdType type;
-  uint8_t arg;
+  uint16_t arg;
   uint32_t mask;  // TestSet: diody do zapalenia
   CRGB color;     // TestSet: ich kolor, Neon: kolor neonu
 };
@@ -40,7 +41,7 @@ uint32_t lastSendMs = 0;
 uint32_t lastCleanupMs = 0;
 bool statePending = false;  // zmiana stanu jeszcze niewyslana do stron
 
-void pushCmd(CmdType type, uint8_t arg = 0, uint32_t mask = 0, CRGB color = CRGB::Black) {
+void pushCmd(CmdType type, uint16_t arg = 0, uint32_t mask = 0, CRGB color = CRGB::Black) {
   Cmd c{type, arg, mask, color};
   xQueueSend(cmdQueue, &c, 0);
 }
@@ -233,7 +234,8 @@ String buildMapJson() {
   appendZone(s, "lr", LEFT_REAR);    s += ',';
   appendZone(s, "rr", RIGHT_REAR);   s += ',';
   appendZone(s, "ls", LEFT_SIDE);    s += ',';
-  appendZone(s, "rs", RIGHT_SIDE);
+  appendZone(s, "rs", RIGHT_SIDE);   s += ',';
+  appendZone(s, "cb", CABIN);
   s += "},\"n\":";
   s += NUM_LEDS;
   s += '}';
@@ -251,12 +253,15 @@ String buildStateJson() {
 
   CRGB neon = Lights::neonColor();
 
-  char buf[160 + sizeof(hex)];
+  char buf[260 + sizeof(hex)];
   snprintf(buf, sizeof(buf),
            "{\"head\":%d,\"turn\":\"%s\",\"hazard\":%d,\"effect\":\"%s\",\"test\":%d,"
-           "\"neon\":\"#%02x%02x%02x\",\"leds\":\"%s\"}",
+           "\"neon\":\"#%02x%02x%02x\",\"cabin\":%d,\"cabinMode\":\"%s\",\"fxBright\":%u,"
+           "\"fxSpeed\":%u,\"cabinBright\":%u,\"cabinSpeed\":%u,\"leds\":\"%s\"}",
            st.headlights, Lights::turnName(st.turn), st.hazard,
-           Lights::effectName(st.effect), Lights::testActive(), neon.r, neon.g, neon.b, hex);
+           Lights::effectName(st.effect), Lights::testActive(), neon.r, neon.g, neon.b,
+           st.cabin, Lights::cabinModeName(st.cabinMode),
+           st.fxBright, st.fxSpeed, st.cabinBright, st.cabinSpeed, hex);
   return String(buf);
 }
 
@@ -341,6 +346,19 @@ void handleMessage(AsyncWebSocketClient* client, const uint8_t* data, size_t len
       uint32_t rgb = strtoul(hex + 1, &end, 16);
       if (end == hex + 7) pushCmd(CmdType::Neon, 0, 0, CRGB(rgb));
     }
+  } else if (!strcmp(cmd, "cabin")) {
+    pushCmd(CmdType::Cabin);
+  } else if (!strcmp(cmd, "cabinMode")) {
+    CabinMode m = Lights::cabinModeFromName(doc["name"] | "warm");
+    pushCmd(CmdType::SetCabinMode, static_cast<uint8_t>(m));
+  } else if (!strcmp(cmd, "fxBright")) {
+    pushCmd(CmdType::FxBright, doc["v"] | 255);
+  } else if (!strcmp(cmd, "fxSpeed")) {
+    pushCmd(CmdType::FxSpeed, doc["v"] | 100);
+  } else if (!strcmp(cmd, "cabinBright")) {
+    pushCmd(CmdType::CabinBright, doc["v"] | 255);
+  } else if (!strcmp(cmd, "cabinSpeed")) {
+    pushCmd(CmdType::CabinSpeed, doc["v"] | 100);
   } else if (!strcmp(cmd, "off")) {
     pushCmd(CmdType::Off);
   } else if (!strcmp(cmd, "test")) {
@@ -429,6 +447,12 @@ void handleCommands() {
       case CmdType::Hazard:    Lights::toggleHazard(); break;
       case CmdType::SetEffect: Lights::setEffect(static_cast<Effect>(c.arg)); break;
       case CmdType::Neon:      Lights::setNeonColor(c.color); break;
+      case CmdType::Cabin:     Lights::toggleCabin(); break;
+      case CmdType::SetCabinMode: Lights::setCabinMode(static_cast<CabinMode>(c.arg)); break;
+      case CmdType::FxBright:  Lights::setFxBright(min<uint16_t>(c.arg, 255)); break;
+      case CmdType::FxSpeed:   Lights::setFxSpeed(c.arg); break;
+      case CmdType::CabinBright: Lights::setCabinBright(min<uint16_t>(c.arg, 255)); break;
+      case CmdType::CabinSpeed:  Lights::setCabinSpeed(c.arg); break;
       case CmdType::Off:       Lights::allOff(); break;
       case CmdType::Restart:   restartAtMs = millis() + 1000; break;  // czas na odpowiedz
       case CmdType::TestSet:   Lights::testSet(c.mask, c.color); break;

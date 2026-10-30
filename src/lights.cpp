@@ -6,6 +6,7 @@
 //   1. bazowa       - swiatla glowne (przod bialy, tyl czerwony)
 //   2. efekt        - animacja na diodach bocznych albo na calym aucie
 //   3. kierunkowskaz - zawsze na wierzchu
+// Diody kabiny nie naleza do zadnej warstwy, rysuje je osobno drawCabin().
 // Wyzsza warstwa tylko przykrywa nizsza, nigdy jej nie nadpisuje,
 // wiec po wylaczeniu kierunkowskazu albo efektu diody wracaja do stanu
 // sprzed ich wlaczenia (z uwzglednieniem zmian zrobionych w miedzyczasie).
@@ -18,8 +19,17 @@ CRGB fx[NUM_LEDS];   // bufor efektu (trwaly, potrzebny do smug skanera)
 LightState st;
 bool changed = true;
 uint32_t turnStart = 0;
+uint32_t headStart = 0;
 uint32_t lastFrame = 0;
-uint8_t rainbowHue = 0;
+
+// Czas animacji efektow i kabiny plynie wg ustawionej predkosci
+// (w setnych ms, zeby nie gubic ulamkow przy predkosci != 100%).
+uint64_t fxClock = 0;
+uint64_t cabinClock = 0;
+uint32_t fxTime = 0;      // ms czasu efektow
+uint32_t cabinTime = 0;   // ms czasu kabiny
+uint32_t cabinStart = 0;  // cabinTime w chwili wlaczenia trybu
+uint8_t fxTicks = 0;      // klatki czasu efektow od poprzedniej klatki (Ogien, Iskry)
 
 bool testOn = false;
 uint32_t testMask = 0;
@@ -27,7 +37,7 @@ CRGB testColor = CRGB::Black;
 
 static_assert(NUM_LEDS <= 32, "maska testu diod miesci 32 diody");
 
-uint32_t fxStart = 0;          // czas wlaczenia efektu
+uint32_t fxStart = 0;          // fxTime w chwili wlaczenia efektu
 uint16_t startHoldMs = 0;      // efekt Start: losowe przytrzymanie czerwonych
 CRGB neon = NEON_COLOR;
 uint8_t heat[2][8];            // efekt Ogien: temperatura rzedow, [strona][0 = tyl]
@@ -35,6 +45,7 @@ uint8_t heat[2][8];            // efekt Ogien: temperatura rzedow, [strona][0 = 
 const char* const EFFECT_NAMES[] = {"none",  "rainbow",  "scanner", "breathe", "police",
                                     "comet", "fire",     "sparkle", "revs",    "tricolor",
                                     "start", "beacon",   "strobe",  "neon"};
+const char* const CABIN_MODE_NAMES[] = {"warm", "ambient", "breathe", "rainbow", "race"};
 // true = efekt przykrywa wszystkie diody, false = tylko boki
 const bool WHOLE_CAR[] = {false, false, false, false, false,
                           true,  true,  true,  true,  true,
@@ -124,19 +135,46 @@ void orRowBoth(uint8_t r, const CRGB& c) {
   }
 }
 
+// Odpowiednik beatsin8 dla czasu efektow: sinus o bpm uderzeniach na minute.
+uint8_t sinAt(uint32_t ms, uint8_t bpm, uint8_t lo, uint8_t hi) {
+  uint8_t phase = (uint64_t)ms * bpm * 256 / 60000;
+  return lo + scale8(sin8(phase), hi - lo);
+}
+
 // ---------------- warstwa 1: swiatla glowne ----------------
-void drawBase() {
+// Po wlaczeniu: diody zapalaja sie po kolei jak kierunkowskaz, ale zostaja,
+// potem blyskaja jasniej i wracaja do normalnej jasnosci HEAD_LEVEL.
+void drawHeadZone(const int8_t (&zone)[3], CRGB c, uint8_t lit, uint8_t level) {
+  c.nscale8_video(level);
+  for (uint8_t s = 0; s < lit; s++) {
+    if (zone[s] >= 0 && zone[s] < NUM_LEDS) out[zone[s]] = c;
+  }
+}
+
+void drawBase(uint32_t now) {
   fill_solid(out, NUM_LEDS, CRGB::Black);
   if (!st.headlights) return;
-  fillZone(LEFT_FRONT, COLOR_HEAD_FRONT);
-  fillZone(RIGHT_FRONT, COLOR_HEAD_FRONT);
-  fillZone(LEFT_REAR, COLOR_HEAD_REAR);
-  fillZone(RIGHT_REAR, COLOR_HEAD_REAR);
+
+  const uint32_t lighting = 3UL * HEAD_ON_STEP_MS;
+  uint32_t t = now - headStart;
+  uint8_t lit = 3;
+  uint8_t level = HEAD_LEVEL;
+  if (t < lighting) {
+    lit = t / HEAD_ON_STEP_MS + 1;
+  } else {
+    uint32_t f = (t - lighting) / HEAD_FLASH_MS;  // parzyste = blysk, nieparzyste = przerwa
+    if (f < 2UL * HEAD_FLASH_COUNT && f % 2 == 0) level = 255;
+  }
+  drawHeadZone(LEFT_FRONT, COLOR_HEAD_FRONT, lit, level);
+  drawHeadZone(RIGHT_FRONT, COLOR_HEAD_FRONT, lit, level);
+  drawHeadZone(LEFT_REAR, COLOR_HEAD_REAR, lit, level);
+  drawHeadZone(RIGHT_REAR, COLOR_HEAD_REAR, lit, level);
 }
 
 // ---------------- warstwa 2: efekty na bokach ----------------
-void runRainbow() {
-  rainbowHue += RAINBOW_SPEED;
+// now = czas efektow (fxTime), plynie wg ustawionej predkosci
+void runRainbow(uint32_t now) {
+  uint8_t rainbowHue = now / FRAME_MS * RAINBOW_SPEED;
   for (uint8_t p = 0; p < 6; p++) {
     // barwa przesuwa sie od przodu do tylu po obu bokach
     CRGB c = CHSV(rainbowHue - p * RAINBOW_HUE_STEP, 255, 255);
@@ -156,9 +194,9 @@ void runScanner(uint32_t now) {
   setFx(LEFT_SIDE[p], SCANNER_COLOR);
 }
 
-void runBreathe() {
+void runBreathe(uint32_t now) {
   CRGB c = BREATHE_COLOR;
-  c.nscale8_video(beatsin8(BREATHE_BPM, 10, 255));
+  c.nscale8_video(sinAt(now, BREATHE_BPM, 10, 255));
   for (uint8_t p = 0; p < 6; p++) {
     setFx(RIGHT_SIDE[p], c);
     setFx(LEFT_SIDE[p], c);
@@ -177,7 +215,7 @@ void runPolice(uint32_t now) {
 }
 
 // ---------------- warstwa 2: efekty na calym aucie ----------------
-// t = czas od wlaczenia efektu (ms)
+// t = czas od wlaczenia efektu (ms czasu efektow)
 
 // Jasna glowa biegnie rzedami od przodu do tylu, za nia gasnacy ogon.
 void runComet(uint32_t t) {
@@ -207,10 +245,19 @@ void runFire() {
   }
 }
 
+// Ogien i Iskry licza sie klatkami: przy innej predkosci krok wykonuje sie
+// tyle razy, ile klatek czasu efektow minelo (przy wolnej czasem 0).
+void runFireTicks() {
+  for (uint8_t k = 0; k < fxTicks; k++) runFire();
+}
+
 // Co klatke losowa dioda dostaje losowy kolor, calosc powoli gasnie.
 void runSparkle() {
-  fadeToBlackBy(fx, NUM_LEDS, SPARKLE_FADE);
-  fx[random8(NUM_LEDS)] = CHSV(random8(), 200, 255);
+  if (ringLen == 0) return;
+  for (uint8_t k = 0; k < fxTicks; k++) {
+    fadeToBlackBy(fx, NUM_LEDS, SPARKLE_FADE);
+    fx[ring[random8(ringLen)]] = CHSV(random8(), 200, 255);  // bez diod kabiny
+  }
 }
 
 // Obrotomierz: pasek od tylu do przodu, zielony -> zolty -> czerwony,
@@ -276,7 +323,7 @@ void runStart(uint32_t t) {
     fill_solid(fx, NUM_LEDS, CRGB::Green);
     return;
   }
-  rainbowHue += START_RAINBOW_SPEED;
+  uint8_t rainbowHue = t / FRAME_MS * START_RAINBOW_SPEED;
   for (uint8_t k = 0; k < ringLen; k++) {
     fx[ring[k]] = CHSV(rainbowHue + k * 256 / ringLen, 255, 255);
   }
@@ -308,15 +355,16 @@ void runNeon() {
   fill_solid(fx, NUM_LEDS, neon);
 }
 
+// now = czas efektow (fxTime), plynie wg ustawionej predkosci
 void drawEffect(uint32_t now) {
   uint32_t t = now - fxStart;
   switch (st.effect) {
-    case Effect::Rainbow:  runRainbow(); break;
+    case Effect::Rainbow:  runRainbow(now); break;
     case Effect::Scanner:  runScanner(now); break;
-    case Effect::Breathe:  runBreathe(); break;
+    case Effect::Breathe:  runBreathe(now); break;
     case Effect::Police:   runPolice(now); break;
     case Effect::Comet:    runComet(t); break;
-    case Effect::Fire:     runFire(); break;
+    case Effect::Fire:     runFireTicks(); break;
     case Effect::Sparkle:  runSparkle(); break;
     case Effect::Revs:     runRevs(t); break;
     case Effect::Tricolor: runTricolor(t); break;
@@ -326,15 +374,16 @@ void drawEffect(uint32_t now) {
     case Effect::Neon:     runNeon(); break;
     default: return;
   }
-  // efekt calego auta przykrywa wszystkie diody (kierunkowskazy i tak sa na wierzchu)
+  // efekt calego auta przykrywa wszystkie diody nadwozia (kierunkowskazy i tak sa
+  // na wierzchu); kabina zostaje niezalezna
   if (WHOLE_CAR[static_cast<uint8_t>(st.effect)]) {
-    memcpy(out, fx, sizeof(out));
+    for (uint8_t k = 0; k < ringLen; k++) out[ring[k]] = CRGB(fx[ring[k]]).nscale8_video(st.fxBright);
     return;
   }
   // efekt na bokach przykrywa tylko diody boczne, reszta auta dziala niezaleznie
   for (uint8_t p = 0; p < 6; p++) {
-    if (RIGHT_SIDE[p] >= 0) out[RIGHT_SIDE[p]] = fx[RIGHT_SIDE[p]];
-    if (LEFT_SIDE[p] >= 0) out[LEFT_SIDE[p]] = fx[LEFT_SIDE[p]];
+    if (RIGHT_SIDE[p] >= 0) out[RIGHT_SIDE[p]] = CRGB(fx[RIGHT_SIDE[p]]).nscale8_video(st.fxBright);
+    if (LEFT_SIDE[p] >= 0) out[LEFT_SIDE[p]] = CRGB(fx[LEFT_SIDE[p]]).nscale8_video(st.fxBright);
   }
 }
 
@@ -360,6 +409,44 @@ void drawTurn(uint32_t now) {
 
   if (left) drawTurnSide(LEFT_FRONT, LEFT_REAR, step);
   if (right) drawTurnSide(RIGHT_FRONT, RIGHT_REAR, step);
+}
+
+// ---------------- kabina ----------------
+// "Swiatla startowe": diody zapalaja sie po kolei, chwile swieca wszystkie,
+// gasna razem i po przerwie od nowa.
+uint8_t raceLit(uint32_t now) {
+  const uint32_t lighting = 3UL * CABIN_RACE_STEP_MS;
+  const uint32_t period = lighting + CABIN_RACE_HOLD_MS + CABIN_RACE_PAUSE_MS;
+  uint32_t t = (now - cabinStart) % period;
+  if (t < lighting) return t / CABIN_RACE_STEP_MS + 1;  // 1..3
+  return t < lighting + CABIN_RACE_HOLD_MS ? 3 : 0;
+}
+
+// now = czas kabiny (cabinTime), plynie wg ustawionej predkosci
+void drawCabin(uint32_t now) {
+  if (!st.cabin) return;
+  CRGB c[3];
+  switch (st.cabinMode) {
+    case CabinMode::Ambient: fill_solid(c, 3, CABIN_AMBIENT_COLOR); break;
+    case CabinMode::Breathe:
+      fill_solid(c, 3, CABIN_BREATHE_COLOR);
+      for (CRGB& x : c) x.nscale8_video(sinAt(now, CABIN_BREATHE_BPM, 15, 255));
+      break;
+    case CabinMode::Rainbow: {
+      uint8_t hue = now / FRAME_MS * CABIN_RAINBOW_SPEED;
+      for (uint8_t p = 0; p < 3; p++) c[p] = CHSV(hue + p * 85, 255, 255);
+      break;
+    }
+    case CabinMode::Race: {
+      uint8_t lit = raceLit(now);
+      for (uint8_t p = 0; p < 3; p++) c[p] = p < lit ? CABIN_RACE_COLOR : CRGB::Black;
+      break;
+    }
+    default: fill_solid(c, 3, CABIN_WARM_COLOR); break;
+  }
+  for (uint8_t p = 0; p < 3; p++) {
+    if (CABIN[p] >= 0 && CABIN[p] < NUM_LEDS) out[CABIN[p]] = c[p].nscale8_video(st.cabinBright);
+  }
 }
 
 // ---------------- tryb testu: zamiast wszystkich warstw ----------------
@@ -389,21 +476,31 @@ void begin() {
 
 void update() {
   uint32_t now = millis();
-  if (now - lastFrame < FRAME_MS) return;
+  uint32_t dt = now - lastFrame;
+  if (dt < FRAME_MS) return;
   lastFrame = now;
+
+  fxClock += (uint64_t)dt * st.fxSpeed;
+  cabinClock += (uint64_t)dt * st.cabinSpeed;
+  uint32_t newFxTime = fxClock / 100;
+  fxTicks = min<uint32_t>(newFxTime / FRAME_MS - fxTime / FRAME_MS, 4);
+  fxTime = newFxTime;
+  cabinTime = cabinClock / 100;
 
   if (testOn) {
     drawTest();
   } else {
-    drawBase();
-    drawEffect(now);
+    drawBase(now);
+    drawEffect(fxTime);
     drawTurn(now);
+    drawCabin(cabinTime);
   }
   FastLED.show();
 }
 
 void toggleHeadlights() {
   st.headlights = !st.headlights;
+  headStart = millis();  // animacja wlaczania
   markChanged();
 }
 
@@ -425,7 +522,7 @@ void setEffect(Effect e) {
   bool same = e == st.effect;
   st.effect = e;
   // takze przy ponownym wyborze: efekt startuje od poczatku
-  fxStart = millis();
+  fxStart = fxTime;
   startHoldMs = random(START_HOLD_MIN_MS, START_HOLD_MAX_MS + 1);
   memset(heat, 0, sizeof(heat));
   clearFx();
@@ -442,8 +539,50 @@ CRGB neonColor() {
   return neon;
 }
 
+void toggleCabin() {
+  st.cabin = !st.cabin;
+  cabinStart = cabinTime;
+  markChanged();
+}
+
+void setCabinMode(CabinMode m) {
+  if (m >= CabinMode::Count) m = CabinMode::Warm;
+  if (st.cabin && m == st.cabinMode) return;
+  st.cabinMode = m;
+  st.cabin = true;
+  cabinStart = cabinTime;
+  markChanged();
+}
+
+void setFxBright(uint8_t v) {
+  st.fxBright = max<uint8_t>(v, FX_BRIGHT_MIN);
+  markChanged();
+}
+
+void setFxSpeed(uint16_t pct) {
+  st.fxSpeed = constrain(pct, FX_SPEED_MIN, FX_SPEED_MAX);
+  markChanged();
+}
+
+void setCabinBright(uint8_t v) {
+  st.cabinBright = max<uint8_t>(v, FX_BRIGHT_MIN);
+  markChanged();
+}
+
+void setCabinSpeed(uint16_t pct) {
+  st.cabinSpeed = constrain(pct, FX_SPEED_MIN, FX_SPEED_MAX);
+  markChanged();
+}
+
 void allOff() {
+  // tryb kabiny, jasnosc i predkosc zostaja na nastepne wlaczenie
+  LightState keep = st;
   st = LightState();
+  st.cabinMode = keep.cabinMode;
+  st.fxBright = keep.fxBright;
+  st.fxSpeed = keep.fxSpeed;
+  st.cabinBright = keep.cabinBright;
+  st.cabinSpeed = keep.cabinSpeed;
   clearFx();
   markChanged();
 }
@@ -490,6 +629,18 @@ Effect effectFromName(const char* name) {
     if (strcmp(name, EFFECT_NAMES[i]) == 0) return static_cast<Effect>(i);
   }
   return Effect::None;
+}
+
+const char* cabinModeName(CabinMode m) {
+  uint8_t i = static_cast<uint8_t>(m);
+  return i < static_cast<uint8_t>(CabinMode::Count) ? CABIN_MODE_NAMES[i] : "warm";
+}
+
+CabinMode cabinModeFromName(const char* name) {
+  for (uint8_t i = 0; i < static_cast<uint8_t>(CabinMode::Count); i++) {
+    if (strcmp(name, CABIN_MODE_NAMES[i]) == 0) return static_cast<CabinMode>(i);
+  }
+  return CabinMode::Warm;
 }
 
 const char* turnName(Turn t) {
