@@ -13,6 +13,8 @@ struct WifiSettings {
   WifiMode mode = WifiMode::None;
   String ssid;
   String pass;
+  bool apPassSet = false;  // false = haslo hotspotu z config.h
+  String apPass;           // "" = otwarty hotspot
 };
 
 constexpr const char* NVS_NAMESPACE = "carled";
@@ -38,6 +40,8 @@ inline WifiSettings loadWifi() {
   s.mode = static_cast<WifiMode>(p.getUChar("wifiMode", 0));
   s.ssid = p.getString("ssid", "");
   s.pass = p.getString("pass", "");
+  s.apPassSet = p.isKey("apPass");
+  s.apPass = p.getString("apPass", "");
   p.end();
   if (s.mode == WifiMode::Sta && s.ssid.isEmpty()) s.mode = WifiMode::None;
   if (s.mode != WifiMode::Sta && s.mode != WifiMode::Ap) s.mode = WifiMode::None;
@@ -50,17 +54,20 @@ inline bool saveWifi(const WifiSettings& s) {
   p.putUChar("wifiMode", static_cast<uint8_t>(s.mode));
   p.putString("ssid", s.ssid);
   p.putString("pass", s.pass);
+  if (s.apPassSet) p.putString("apPass", s.apPass);
+  else p.remove("apPass");
   p.end();
   return true;
 }
 
-// Usuwa ustawienia WiFi, nastepny start wg config.h.
+// Usuwa ustawienia WiFi (z haslem hotspotu), nastepny start wg config.h.
 inline void clearWifi() {
   Preferences p;
   if (!p.begin(NVS_NAMESPACE, false)) return;
   p.remove("wifiMode");
   p.remove("ssid");
   p.remove("pass");
+  p.remove("apPass");
   p.end();
 }
 

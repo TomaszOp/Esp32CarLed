@@ -8,7 +8,20 @@ Sterowanie światłami modelu **Peugeot 9X8** z telefonu. ESP32-C3 steruje taśm
 - **Kierunkowskazy:** biegnąca pojedyncza dioda (zewnętrzna → środkowa → wewnętrzna), z przodu i z tyłu danej strony.
 - **Światła awaryjne:** oba kierunkowskazy jednocześnie. Włączony wcześniej kierunkowskaz wraca po ich wyłączeniu.
 - **Efekty specjalne na bokach:** tęcza, skaner, oddychanie, policja. Reszta auta działa w tym czasie niezależnie.
+- **Efekty na całym aucie** (wszystkie 22 diody):
+  - *Kometa* – biało-niebieska głowa z ogonem biegnie od przodu do tyłu po obu stronach, potem krótka przerwa.
+  - *Ogień* – płomienie (Fire2012) od tyłu do przodu, liczone osobno dla lewej i prawej strony.
+  - *Iskry* – losowe kolorowe iskry, które powoli gasną.
+  - *Obroty silnika* – pasek rośnie od tyłu do przodu (zielony → żółty → czerwony), błysk i spadek do 1/3 przy zmianie biegu; po 4 biegach od zera.
+  - *Trójkolorowa flaga* – pasy niebieski, biały, czerwony płynnie przesuwają się od przodu do tyłu.
+  - *Start wyścigu* – 5 czerwonych świateł na bokach co 0,8 s, losowe przytrzymanie 0,5–2 s, zgaszenie, zielony błysk, potem tęcza dookoła auta. Ponowny wybór startuje od początku.
+  - *Kogut pomocy drogowej* – pomarańczowe światło obiega auto dookoła (obrót w 0,6 s).
+  - *Stroboskop* – dwa krótkie białe błyski i pauza.
+  - *Neon* – stały kolor na wszystkich diodach; kolor wybierasz w panelu obok przycisku (domyślnie fioletowy, nie jest zapisywany w NVS).
+
+  Światła główne, kierunkowskaz i awaryjne zachowują stan w trakcie efektu (można je też przełączać). Kierunkowskazy i awaryjne świecą na wierzchu efektu, a po wyłączeniu efektu wracają światła takie, jak są ustawione. Czasy i kolory efektów są w `config.h`.
 - **OFF:** gasi wszystkie diody.
+- **Test diod:** osobna strona do sprawdzania pojedynczych diod, stref i kolorów.
 - Po wyłączeniu kierunkowskazu lub efektu diody wracają do poprzedniego stanu.
 
 ## Sprzęt
@@ -58,7 +71,7 @@ Jeśli kierunkowskaz biegnie w złą stronę, odwróć kolejność w danej tabli
 4. Wgraj program: `pio run -t upload`, potem `pio device monitor`.
 5. Otwórz adres z monitora szeregowego albo `http://carled.local`.
 
-Jeśli ESP32 nie połączy się z siecią w 15 s, uruchomi otwarty Access Point **CarLed**. Połącz się z nim i otwórz `http://192.168.4.1`.
+Jeśli ESP32 nie połączy się z siecią w 15 s, uruchomi Access Point **CarLed**. Domyślnie jest otwarty; hasło (8–63 znaki) ustawisz w `AP_PASS` w `config.h` albo na stronie `/wifi`, która ma pierwszeństwo. Połącz się z nim i otwórz `http://192.168.4.1`.
 
 ### Ustawienia WiFi z panelu
 
@@ -66,9 +79,11 @@ Ikona WiFi w prawym górnym rogu panelu otwiera stronę `/wifi`. Wybrany tryb za
 
 | Zapisany tryb | Start |
 | --- | --- |
-| Połącz z siecią WiFi | łączy się z zapisaną siecią, a gdy się nie uda, uruchamia otwarty hotspot CarLed |
-| Tylko hotspot CarLed | od razu otwarty hotspot CarLed |
-| Domyślne z config.h (brak zapisu) | łączy się z siecią z `config.h`, a gdy się nie uda, uruchamia hotspot CarLed |
+| Połącz z siecią WiFi | łączy się z zapisaną siecią, a gdy się nie uda, uruchamia hotspot CarLed |
+| Tylko hotspot CarLed | od razu hotspot CarLed |
+| Domyślne z config.h (brak zapisu) | łączy się z siecią z `config.h`, a gdy się nie uda, uruchamia hotspot CarLed; usuwa też hasło hotspotu zapisane na `/wifi` |
+
+Na tej samej stronie ustawisz hasło hotspotu albo zaznaczysz „otwarty hotspot”. Puste pole hasła zostawia dotychczasowe.
 
 ### Aktualizacja firmware przez WiFi (OTA)
 
@@ -88,7 +103,30 @@ Ustawienia WiFi w NVS zostają po aktualizacji. Nieudane lub przerwane wgrywanie
 | Lewy przód lub lewy tył | lewy kierunkowskaz wł./wył. |
 | Środek auta | światła awaryjne wł./wył. |
 
-Pod schematem: przycisk **OFF** i **Efekty specjalne** (okno z listą efektów; ponowne kliknięcie aktywnego efektu go wyłącza).
+Pod schematem: przycisk **OFF** i **Efekty specjalne** (okno z listą efektów w dwóch grupach: *Na bokach* i *Na całym aucie*; ponowne kliknięcie aktywnego efektu go wyłącza, a przy *Starcie wyścigu* uruchamia sekwencję od nowa). Obok *Neonu* jest pole wyboru koloru.
+
+### Komendy WebSocket (`/ws`)
+
+| Komenda | Działanie |
+| --- | --- |
+| `{"cmd":"head"}` | światła główne wł./wył. |
+| `{"cmd":"turn","dir":"L"}` / `"R"` | kierunkowskaz wł./wył. |
+| `{"cmd":"hazard"}` | awaryjne wł./wył. |
+| `{"cmd":"effect","name":"comet"}` | efekt: `rainbow`, `scanner`, `breathe`, `police`, `comet`, `fire`, `sparkle`, `revs`, `tricolor`, `start`, `beacon`, `strobe`, `neon` albo `none` |
+| `{"cmd":"neon","color":"#8000FF"}` | kolor efektu Neon (tylko RAM, nie zmienia aktywnego efektu) |
+| `{"cmd":"off"}` | wszystko wyłączone |
+
+Stan rozsyłany do stron zawiera m.in. pole `"neon":"#rrggbb"`.
+
+## Test diod
+
+Ikona żarówki w prawym górnym rogu panelu otwiera stronę `/test`. Strona jest ułożona pod telefon i mieści się na jednym ekranie. Wejście na nią zapamiętuje stan świateł (światła, kierunkowskaz, awaryjne, efekt), a wyjście go przywraca.
+
+- **Tryb testu** (lista): *Wszystkie diody*, *Wybrane numery* albo strefa (przód lewy/prawy, cały przód, tył lewy/prawy, cały tył, bok lewy/prawy, oba boki). Pod listą jest pole **Numery diod**, np. `3, 5, 10-12`; wpisanie numerów od razu przełącza tryb na *Wybrane numery*. Dotknięcie diody na schemacie dodaje ją albo usuwa. Strzałki ◀ ▶ przechodzą do poprzedniej/następnej pojedynczej diody, a *Auto* robi to samo co 0,7 s, co ułatwia sprawdzenie mapowania w `config.h`. Dla jednej diody strona podaje jej położenie (np. „przód lewy, środkowa”).
+- **Światło:** przycisk ON/OFF, wybór koloru i gotowe kolory. Strona pokazuje wartości R, G, B i kod HEX, a wybrane diody świecą tym kolorem. Pozostałe diody są w trakcie testu zgaszone. Jasność na taśmie jest dodatkowo ograniczona przez `LED_BRIGHTNESS`.
+- **Zakończ test** (albo strzałka powrotu) przywraca światła. Zamknięcie karty lub utrata połączenia też kończy test, więc auto nie zostanie w trybie testu.
+
+W trakcie testu panel główny pokazuje „Trwa test diod”, a jego przyciski nie zmieniają świateł, żeby po teście wrócił dokładnie zapamiętany stan.
 
 ## Struktura projektu
 
@@ -101,11 +139,11 @@ Esp32CarLed/
 │   ├── lights.h          interfejs logiki świateł
 │   ├── NvsSettings.h     ustawienia WiFi zapisane w NVS
 │   ├── web.h             interfejs WiFi i serwera
-│   └── web_page.h        panel i strona WiFi (HTML/CSS/JS w PROGMEM)
+│   └── web_page.h        panel, strony WiFi, aktualizacji i testu diod (HTML/CSS/JS w PROGMEM)
 └── src/
     ├── main.cpp          setup() i loop()
-    ├── lights.cpp        warstwy świateł, kierunkowskazy, efekty
-    └── web.cpp           WiFi/AP, serwer HTTP, WebSocket, strona /wifi
+    ├── lights.cpp        warstwy świateł, kierunkowskazy, efekty, tryb testu
+    └── web.cpp           WiFi/AP, serwer HTTP, WebSocket, strony /wifi, /update, /test
 ```
 
 Biblioteki są w katalogu `lib/`: FastLED 3.9.20, ESPAsyncWebServer 3.12.1 i AsyncTCP 3.5.0 (ESP32Async), ArduinoJson 7.4.3. Z `lib/ESPAsyncWebServer/library.json` usunięto sekcję `dependencies`, bo PlatformIO pobierał z niej biblioteki dla ESP8266 i Raspberry Pi.

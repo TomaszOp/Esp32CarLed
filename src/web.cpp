@@ -20,27 +20,47 @@ AsyncWebSocket ws("/ws");
 
 // Komendy z WebSocketu przychodza w zadaniu AsyncTCP, a diody renderuje loop().
 // Kolejka przenosi je bezpiecznie do loop().
-enum class CmdType : uint8_t { Head, TurnLeft, TurnRight, Hazard, SetEffect, Off, Restart };
+enum class CmdType : uint8_t {
+  Head, TurnLeft, TurnRight, Hazard, SetEffect, Neon, Off, Restart, TestSet, TestEnd
+};
 struct Cmd {
   CmdType type;
   uint8_t arg;
+  uint32_t mask;  // TestSet: diody do zapalenia
+  CRGB color;     // TestSet: ich kolor, Neon: kolor neonu
 };
 QueueHandle_t cmdQueue;
+
+// Strona /test, ktora ostatnio ustawila test. Jej rozlaczenie konczy test,
+// wiec zamkniecie karty albo utrata WiFi tez przywraca swiatla.
+uint32_t testOwner = 0;
 
 CRGB lastSent[NUM_LEDS];
 uint32_t lastSendMs = 0;
 uint32_t lastCleanupMs = 0;
+bool statePending = false;  // zmiana stanu jeszcze niewyslana do stron
 
-void pushCmd(CmdType type, uint8_t arg = 0) {
-  Cmd c{type, arg};
+void pushCmd(CmdType type, uint8_t arg = 0, uint32_t mask = 0, CRGB color = CRGB::Black) {
+  Cmd c{type, arg, mask, color};
   xQueueSend(cmdQueue, &c, 0);
 }
 
 constexpr bool OTA_HAS_PASSWORD = sizeof(OTA_PASSWORD) > 1;  // "" = bez hasla
+static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <= 64),
+              "AP_PASS: puste albo 8-63 znaki");
 
 // ---------------- WiFi ----------------
 NvsSettings::WifiSettings savedWifi;  // ustawienia z NVS odczytane przy starcie
 uint32_t restartAtMs = 0;             // != 0: restart po zapisaniu ustawien WiFi
+
+// Haslo hotspotu: z NVS, jesli zapisane na /wifi, inaczej z config.h. "" = otwarty.
+String apPass() {
+  return savedWifi.apPassSet ? savedWifi.apPass : String(AP_PASS);
+}
+
+bool validApPass(const String& p) {
+  return p.isEmpty() || (p.length() >= 8 && p.length() <= 63);
+}
 
 bool connectSta(const char* ssid, const char* pass) {
   WiFi.mode(WIFI_STA);
@@ -68,19 +88,24 @@ bool connectSta(const char* ssid, const char* pass) {
 }
 
 void startAp() {
+  String pass = apPass();
+  if (!validApPass(pass)) {
+    Serial.println("Nieprawidlowe haslo hotspotu, uruchamiam siec otwarta.");
+    pass = "";
+  }
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID);  // siec otwarta
+  WiFi.softAP(AP_SSID, pass.isEmpty() ? nullptr : pass.c_str());
 #ifdef WIFI_LOW_TX_POWER
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 #endif
-  Serial.printf("Access Point \"%s\". Panel: http://%s\n", AP_SSID,
-                WiFi.softAPIP().toString().c_str());
+  Serial.printf("Access Point \"%s\" (%s). Panel: http://%s\n", AP_SSID,
+                pass.isEmpty() ? "otwarty" : "z haslem", WiFi.softAPIP().toString().c_str());
 }
 
 // Ustawienia z NVS maja pierwszenstwo przed config.h:
-//   sta  -> siec z NVS, po nieudanej probie otwarty AP
-//   ap   -> od razu otwarty AP
-//   brak -> siec z config.h, po nieudanej probie otwarty AP
+//   sta  -> siec z NVS, po nieudanej probie AP
+//   ap   -> od razu AP
+//   brak -> siec z config.h, po nieudanej probie AP
 void startWifi() {
   savedWifi = NvsSettings::loadWifi();
   Serial.printf("Ustawienia WiFi w NVS: %s\n", NvsSettings::modeName(savedWifi.mode));
@@ -224,11 +249,14 @@ String buildStateJson() {
     snprintf(hex + i * 6, 7, "%02x%02x%02x", leds[i].r, leds[i].g, leds[i].b);
   }
 
-  char buf[128 + sizeof(hex)];
+  CRGB neon = Lights::neonColor();
+
+  char buf[160 + sizeof(hex)];
   snprintf(buf, sizeof(buf),
-           "{\"head\":%d,\"turn\":\"%s\",\"hazard\":%d,\"effect\":\"%s\",\"leds\":\"%s\"}",
+           "{\"head\":%d,\"turn\":\"%s\",\"hazard\":%d,\"effect\":\"%s\",\"test\":%d,"
+           "\"neon\":\"#%02x%02x%02x\",\"leds\":\"%s\"}",
            st.headlights, Lights::turnName(st.turn), st.hazard,
-           Lights::effectName(st.effect), hex);
+           Lights::effectName(st.effect), Lights::testActive(), neon.r, neon.g, neon.b, hex);
   return String(buf);
 }
 
@@ -240,12 +268,15 @@ String buildWifiJson() {
   doc["hasPass"] = !savedWifi.pass.isEmpty();
   doc["now"] = WiFi.getMode() == WIFI_AP ? "ap" : "sta";
   doc["nowSsid"] = WiFi.getMode() == WIFI_AP ? String(AP_SSID) : WiFi.SSID();
+  doc["apOpen"] = apPass().isEmpty();
+  doc["apSaved"] = savedWifi.apPassSet;
   String s;
   serializeJson(doc, s);
   return s;
 }
 
-// POST /wifi (mode, ssid, pass). Puste haslo przy tej samej sieci = zostaw stare.
+// POST /wifi (mode, ssid, pass, apOpen, apPass). Puste haslo przy tej samej sieci = zostaw stare.
+// Haslo hotspotu: apOpen=1 -> otwarty, niepuste apPass -> nowe haslo, puste -> bez zmian.
 void handleWifiSave(AsyncWebServerRequest* req) {
   auto param = [req](const char* name) {
     const AsyncWebParameter* p = req->getParam(name, true);
@@ -268,6 +299,16 @@ void handleWifiSave(AsyncWebServerRequest* req) {
       }
       if (s.pass.isEmpty() && s.ssid == savedWifi.ssid) s.pass = savedWifi.pass;
     }
+    s.apPassSet = savedWifi.apPassSet;
+    s.apPass = savedWifi.apPass;
+    if (param("apOpen") == "1") {
+      s.apPassSet = true;
+      s.apPass = "";
+    } else if (!param("apPass").isEmpty()) {
+      s.apPassSet = true;
+      s.apPass = param("apPass");
+      if (!validApPass(s.apPass)) return fail("Haslo hotspotu musi miec 8-63 znaki");
+    }
     if (!NvsSettings::saveWifi(s)) return fail("Blad zapisu NVS");
   }
   Serial.printf("Zapisano tryb WiFi: %s, restart.\n", NvsSettings::modeName(s.mode));
@@ -276,7 +317,7 @@ void handleWifiSave(AsyncWebServerRequest* req) {
 }
 
 // ---------------- WebSocket ----------------
-void handleMessage(const uint8_t* data, size_t len) {
+void handleMessage(AsyncWebSocketClient* client, const uint8_t* data, size_t len) {
   JsonDocument doc;
   if (deserializeJson(doc, data, len)) return;
 
@@ -292,8 +333,27 @@ void handleMessage(const uint8_t* data, size_t len) {
   } else if (!strcmp(cmd, "effect")) {
     Effect e = Lights::effectFromName(doc["name"] | "none");
     pushCmd(CmdType::SetEffect, static_cast<uint8_t>(e));
+  } else if (!strcmp(cmd, "neon")) {
+    // {"cmd":"neon","color":"#RRGGBB"}
+    const char* hex = doc["color"] | "";
+    if (hex[0] == '#' && strlen(hex) == 7) {
+      char* end = nullptr;
+      uint32_t rgb = strtoul(hex + 1, &end, 16);
+      if (end == hex + 7) pushCmd(CmdType::Neon, 0, 0, CRGB(rgb));
+    }
   } else if (!strcmp(cmd, "off")) {
     pushCmd(CmdType::Off);
+  } else if (!strcmp(cmd, "test")) {
+    // {"cmd":"test","mask":<bit i = dioda i>,"on":true,"r":..,"g":..,"b":..}; on=false gasi diody testu
+    bool on = doc["on"] | false;
+    uint32_t mask = on ? (doc["mask"] | 0u) : 0u;
+    if (NUM_LEDS < 32) mask &= (1UL << NUM_LEDS) - 1;
+    CRGB color(doc["r"] | 0, doc["g"] | 0, doc["b"] | 0);
+    testOwner = client->id();
+    pushCmd(CmdType::TestSet, 0, mask, color);
+  } else if (!strcmp(cmd, "testEnd")) {
+    testOwner = 0;
+    pushCmd(CmdType::TestEnd);
   }
 }
 
@@ -302,10 +362,15 @@ void onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client, AwsEventType type,
   if (type == WS_EVT_CONNECT) {
     client->text(buildMapJson());
     client->text(buildStateJson());
+  } else if (type == WS_EVT_DISCONNECT) {
+    if (testOwner && client->id() == testOwner) {
+      testOwner = 0;
+      pushCmd(CmdType::TestEnd);
+    }
   } else if (type == WS_EVT_DATA) {
     AwsFrameInfo* info = static_cast<AwsFrameInfo*>(arg);
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-      handleMessage(data, len);
+      handleMessage(client, data, len);
     }
   }
 }
@@ -324,6 +389,10 @@ void begin() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
     req->send(200, "text/html", reinterpret_cast<const uint8_t*>(INDEX_HTML),
               strlen_P(INDEX_HTML));
+  });
+  server.on("/test", HTTP_GET, [](AsyncWebServerRequest* req) {
+    req->send(200, "text/html", reinterpret_cast<const uint8_t*>(TEST_HTML),
+              strlen_P(TEST_HTML));
   });
   server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest* req) {
     req->send(200, "text/html", reinterpret_cast<const uint8_t*>(WIFI_HTML),
@@ -351,14 +420,19 @@ void handleCommands() {
 
   Cmd c;
   while (xQueueReceive(cmdQueue, &c, 0) == pdTRUE) {
+    // W trakcie testu stan swiatel jest zamrozony, zeby po tescie wrocil bez zmian.
+    if (Lights::testActive() && c.type <= CmdType::Off) continue;
     switch (c.type) {
       case CmdType::Head:      Lights::toggleHeadlights(); break;
       case CmdType::TurnLeft:  Lights::toggleTurn(Turn::Left); break;
       case CmdType::TurnRight: Lights::toggleTurn(Turn::Right); break;
       case CmdType::Hazard:    Lights::toggleHazard(); break;
       case CmdType::SetEffect: Lights::setEffect(static_cast<Effect>(c.arg)); break;
+      case CmdType::Neon:      Lights::setNeonColor(c.color); break;
       case CmdType::Off:       Lights::allOff(); break;
       case CmdType::Restart:   restartAtMs = millis() + 1000; break;  // czas na odpowiedz
+      case CmdType::TestSet:   Lights::testSet(c.mask, c.color); break;
+      case CmdType::TestEnd:   Lights::testEnd(); break;
     }
   }
   if (restartAtMs && (int32_t)(millis() - restartAtMs) >= 0) ESP.restart();
@@ -371,16 +445,22 @@ void broadcast() {
     lastCleanupMs = now;
   }
 
-  bool stateChanged = Lights::consumeChanged();
-  if (ws.count() == 0) return;
+  // Zmiana stanu czeka, az da sie ja wyslac (gdy bufor klienta jest pelny, nie przepada).
+  // Bez klientow nie ma po co jej trzymac: nowa strona dostaje pelny stan przy polaczeniu.
+  if (Lights::consumeChanged()) statePending = true;
+  if (ws.count() == 0) {
+    statePending = false;
+    return;
+  }
 
   bool ledsChanged = memcmp(lastSent, Lights::leds(), sizeof(lastSent)) != 0;
-  if (!stateChanged && !(ledsChanged && now - lastSendMs >= WS_FRAME_MS)) return;
+  if (!statePending && !(ledsChanged && now - lastSendMs >= WS_FRAME_MS)) return;
   if (!ws.availableForWriteAll()) return;
 
   ws.textAll(buildStateJson());
   memcpy(lastSent, Lights::leds(), sizeof(lastSent));
   lastSendMs = now;
+  statePending = false;
 }
 
 }  // namespace Web
